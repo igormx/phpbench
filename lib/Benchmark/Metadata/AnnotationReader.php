@@ -1,29 +1,23 @@
 <?php
 
-/*
- * This file is part of the PHPBench package
- *
- * (c) Daniel Leech <daniel@dantleech.com>
- *
- * For the full copyright and license information, please view the LICENSE
- * file that was distributed with this source code.
- */
-
 namespace PhpBench\Benchmark\Metadata;
 
-use Doctrine\Common\Annotations\AnnotationException;
-use Doctrine\Common\Annotations\DocParser as DoctrineDocParser;
+use PhpBench\Benchmark\Remote\ReflectionClass;
 use Doctrine\Common\Annotations\PhpParser;
+use Doctrine\Common\Annotations\DocParser;
+use Doctrine\Common\Annotations\TokenParser;
+use PhpBench\Benchmark\Remote\ReflectionMethod;
+use Doctrine\Common\Annotations\AnnotationException;
 
 /**
- * PHPBench doc parser, uses the Doctrine DocParser.
+ * Annotation reader
  */
-class DocParser
+class AnnotationReader
 {
-    private $docParser;
-    private $phpParser;
+    private $useImports = [];
+    private $importUse = false;
 
-    private $imports = [
+    private static $phpBenchImports = [
         'BeforeMethods' => 'PhpBench\Benchmark\Metadata\Annotations\BeforeMethods',
         'BeforeClassMethods' => 'PhpBench\Benchmark\Metadata\Annotations\BeforeClassMethods',
         'AfterMethods' => 'PhpBench\Benchmark\Metadata\Annotations\AfterMethods',
@@ -39,6 +33,7 @@ class DocParser
         'Warmup' => 'PhpBench\Benchmark\Metadata\Annotations\Warmup',
         'Subject' => 'PhpBench\Benchmark\Metadata\Annotations\Subject',
     ];
+
     private static $globalIgnoredNames = [
         // Annotation tags
         'Annotation' => true, 'Attribute' => true, 'Attributes' => true,
@@ -80,6 +75,8 @@ class DocParser
         // PHPUnit tags
         'codeCoverageIgnore' => true, 'codeCoverageIgnoreStart' => true, 'codeCoverageIgnoreEnd' => true,
         'expectedException' => true, 'expectedExceptionMessage' => true,
+        'dataProvider' => true,
+        // TODO: Add all PHPUnit annotations here ...
         // PHPCheckStyle
         'SuppressWarnings' => true,
         // PHPStorm
@@ -90,21 +87,73 @@ class DocParser
         'startuml' => true, 'enduml' => true,
     ];
 
-    public function __construct($import = false)
+    /**
+     * Set import use to true in order to use imported annotations, otherwise
+     * import the PHPBench annotations directly.
+     *
+     * @param bool $importUse
+     */
+    public function __construct($importUse = false)
     {
-        $this->docParser = new DoctrineDocParser();
-        $this->phpParser = new PhpParser();
+        $this->docParser = new DocParser();
         $this->docParser->setIgnoredAnnotationNames(self::$globalIgnoredNames);
+        $this->phpParser = new PhpParser();
+    }
 
-        if ($import) {
-            $imports = [];
-            foreach ($this->imports as $key => $value) {
-                $imports[strtolower($key)] = $value;
-            }
+    /**
+     * Return annotations for the given class.
+     */
+    public function getClassAnnotations(ReflectionClass $class)
+    {
+        $this->collectImports($class);
+        return $this->parse($class->comment, sprintf('benchmark: %s', $class->class));
+    }
 
-            $this->docParser->setImports($imports);
+    public function getMethodAnnotations(ReflectionMethod $method)
+    {
+        $this->collectImports($method->reflectionClass);
+        return $this->parse($method->comment, sprintf('subject %s::%s', $method->class, $method->name));
+    }
+
+    private function collectImports(ReflectionClass $class)
+    {
+        if ($this->importUse === true) {
+            $imports = $this->getUseImports($class);
         } else {
+            $imports = $this->getPhpBenchImports();
         }
+
+        $this->docParser->setImports($imports);
+    }
+
+    private function getPhpBenchImports()
+    {
+        static $phpBenchImports;
+
+        if ($phpBenchImports) {
+            return $phpBenchImports;
+        }
+
+        foreach (self::$phpBenchImports as $key => $value) {
+            $phpBenchImports[strtolower($key)] = $value;
+        }
+
+        return $phpBenchImports;
+
+    }
+
+    private function getUseImports(ReflectionClass $class)
+    {
+        if (isset($this->useImports[$class->class])) {
+            return $this->useImports[$class->class];
+        }
+
+        $content = file_get_contents($class->path);
+        $tokenizer = new TokenParser('<?php ' . $content);
+        $useImports = $tokenizer->parseUseStatements($class->namespace);
+        $this->useImports[$class->class] = $useImports;
+
+        return $useImports;
     }
 
     /**
@@ -113,7 +162,7 @@ class DocParser
      *
      * @see \Doctrine\Common\Annotations\DocParser
      */
-    public function parse($input, $context = '')
+    private function parse($input, $context = '')
     {
         try {
             $annotations = $this->docParser->parse($input, $context);
@@ -125,7 +174,7 @@ class DocParser
             throw new \InvalidArgumentException(sprintf(
                 'Unrecognized annotation %s, valid PHPBench annotations: @%s',
                 $matches[1],
-                implode(', @', array_keys($this->imports))
+                implode(', @', array_keys(self::$phpBenchImports))
             ), null, $e);
         }
 

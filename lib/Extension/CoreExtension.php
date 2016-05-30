@@ -70,6 +70,7 @@ use PhpBench\Storage\Driver\Xml\XmlDriver;
 use PhpBench\Storage\UuidResolver;
 use PhpBench\Util\TimeUnit;
 use Symfony\Component\Finder\Finder;
+use PhpBench\Benchmark\Metadata\AnnotationReader;
 
 class CoreExtension implements ExtensionInterface
 {
@@ -93,6 +94,7 @@ class CoreExtension implements ExtensionInterface
             'env_baseline_callables' => [],
             'xml_storage_path' => getcwd() . '/_storage', // use cwd because PHARs
             'extension_autoloader' => null,
+            'annotation_import_use' => false,
         ];
     }
 
@@ -226,9 +228,14 @@ class CoreExtension implements ExtensionInterface
             return new Reflector($container->get('benchmark.remote.launcher'));
         });
 
+        $container->register('benchmark.annotation_reader', function (Container $container) {
+            return new AnnotationReader($container->getParameter('annotation_import_use'));
+        });
+
         $container->register('benchmark.metadata.driver.annotation', function (Container $container) {
             return new AnnotationDriver(
-                $container->get('benchmark.remote.reflector')
+                $container->get('benchmark.remote.reflector'),
+                $container->get('benchmark.annotation_reader')
             );
         });
 
